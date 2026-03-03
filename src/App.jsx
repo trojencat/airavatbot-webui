@@ -1,6 +1,7 @@
 import { useState, useEffect, createContext, useContext, useCallback } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import Sidebar from './components/Sidebar'
+import ProcessSidebar from './components/ProcessSidebar'
 import ChatPage from './pages/ChatPage'
 import SettingsPage from './pages/SettingsPage'
 
@@ -86,6 +87,7 @@ export default function App() {
             <Route path="/" element={<ChatPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
+          <ProcessSidebar />
         </div>
       </DaemonContext.Provider>
     </ThemeContext.Provider>

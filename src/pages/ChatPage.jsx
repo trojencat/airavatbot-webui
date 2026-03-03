@@ -19,8 +19,8 @@ function formatContent(text) {
 export default function ChatPage() {
     const [messages, setMessages] = useState([])
     const [input, setInput] = useState('')
-    const [sending, setSending] = useState(false)
     const [showWelcome, setShowWelcome] = useState(true)
+    const [conversationId, setConversationId] = useState(null)
     const messagesRef = useRef(null)
     const inputRef = useRef(null)
 
@@ -31,9 +31,30 @@ export default function ChatPage() {
     }, [])
 
     useEffect(() => {
-        const handleClear = () => { setMessages([]); setShowWelcome(true) }
+        const handleClear = () => { setMessages([]); setShowWelcome(true); setConversationId(null); }
+        const handleLoadChat = async (e) => {
+            const id = e.detail?.id
+            if (!id) return
+
+            try {
+                const res = await fetch(`/api/chat/conversations/${id}`)
+                if (res.ok) {
+                    const data = await res.json()
+                    setMessages(data.history || [])
+                    setConversationId(data.id)
+                    setShowWelcome(false)
+                }
+            } catch (err) {
+                console.error("Failed to load chat", err)
+            }
+        }
+
         window.addEventListener('airavat:clear-chat', handleClear)
-        return () => window.removeEventListener('airavat:clear-chat', handleClear)
+        window.addEventListener('airavat:load-chat', handleLoadChat)
+        return () => {
+            window.removeEventListener('airavat:clear-chat', handleClear)
+            window.removeEventListener('airavat:load-chat', handleLoadChat)
+        }
     }, [])
 
     useEffect(() => { scrollToBottom() }, [messages, scrollToBottom])
@@ -41,21 +62,28 @@ export default function ChatPage() {
     const handleSubmit = async (e) => {
         e.preventDefault()
         const message = input.trim()
-        if (!message || sending) return
+        if (!message) return
         setShowWelcome(false)
         setMessages((prev) => [...prev, { role: 'user', content: message }])
         setInput('')
-        setSending(true)
-        const loadingId = Date.now()
-        setMessages((prev) => [...prev, { id: loadingId, role: 'loading' }])
+
+        const wittyReplies = [
+            "on it."
+        ];
+        const wittyReply = wittyReplies[Math.floor(Math.random() * wittyReplies.length)];
+        setMessages((prev) => [...prev, { role: 'assistant', content: wittyReply }])
 
         try {
+            const payload = { message }
+            if (conversationId) {
+                payload.conversation_id = conversationId
+            }
+
             const res = await fetch('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message }),
+                body: JSON.stringify(payload),
             })
-            setMessages((prev) => prev.filter((m) => m.id !== loadingId))
             if (!res.ok) {
                 const err = await res.json()
                 setMessages((prev) => [...prev, { role: 'error', content: err.error || 'Something went wrong' }])
@@ -64,11 +92,14 @@ export default function ChatPage() {
             const data = await res.json()
             if (data.toolCalls?.length > 0) setMessages((prev) => [...prev, { role: 'tools', toolCalls: data.toolCalls }])
             if (data.reply) setMessages((prev) => [...prev, { role: 'assistant', content: data.reply }])
+
+            if (data.conversation_id && data.conversation_id !== conversationId) {
+                setConversationId(data.conversation_id)
+                window.dispatchEvent(new CustomEvent('airavat:chat-active', { detail: { id: data.conversation_id } }))
+            }
         } catch {
-            setMessages((prev) => prev.filter((m) => m.id !== loadingId))
             setMessages((prev) => [...prev, { role: 'error', content: 'Network error — is the server running?' }])
         } finally {
-            setSending(false)
             inputRef.current?.focus()
         }
     }
@@ -103,22 +134,6 @@ export default function ChatPage() {
                 )}
 
                 {messages.map((msg, i) => {
-                    if (msg.role === 'loading') {
-                        return (
-                            <div key={msg.id} className="max-w-[680px] w-full mx-auto animate-message-in">
-                                <div className="text-[11px] font-bold uppercase tracking-wide mb-1 px-0.5 text-text-muted">Assistant</div>
-                                <div className="px-3.5 py-2.5 rounded-md bg-surface border border-border text-[13px] leading-relaxed flex items-center gap-2">
-                                    <div className="flex gap-1">
-                                        <span className="w-1.5 h-1.5 rounded-full bg-fb-blue animate-bounce-dot" />
-                                        <span className="w-1.5 h-1.5 rounded-full bg-fb-blue animate-bounce-dot-2" />
-                                        <span className="w-1.5 h-1.5 rounded-full bg-fb-blue animate-bounce-dot-3" />
-                                    </div>
-                                    <span className="text-text-muted text-xs">Thinking...</span>
-                                </div>
-                            </div>
-                        )
-                    }
-
                     if (msg.role === 'tools') {
                         return (
                             <div key={i} className="max-w-[680px] w-full mx-auto animate-message-in">
@@ -172,7 +187,7 @@ export default function ChatPage() {
                             onKeyDown={handleKeyDown}
                             autoFocus
                         />
-                        <button type="submit" disabled={sending} title="Send" className="flex items-center justify-center w-8 h-8 border-none rounded bg-fb-blue text-white cursor-pointer transition-colors hover:bg-fb-blue-hover disabled:opacity-40 disabled:cursor-not-allowed shrink-0">
+                        <button type="submit" disabled={!input.trim()} title="Send" className="flex items-center justify-center w-8 h-8 border-none rounded bg-fb-blue text-white cursor-pointer transition-colors hover:bg-fb-blue-hover disabled:opacity-40 disabled:cursor-not-allowed shrink-0">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                                 <line x1="22" y1="2" x2="11" y2="13" />
                                 <polygon points="22 2 15 22 11 13 2 9 22 2" />
