@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { useConversationManager } from '../hooks/useConversationManager'
 import airavatLogo from '/airavat_logo.png'
 
 function escapeHtml(text) {
@@ -17,19 +18,33 @@ function formatContent(text) {
     return html
 }
 
-export default function ChatPage() {
-    const { id: routeId } = useParams()
+export default function EnhancedChatPage() {
+    const location = useLocation()
     const navigate = useNavigate()
-    const [messages, setMessages] = useState([])
     const [input, setInput] = useState('')
     const [showWelcome, setShowWelcome] = useState(true)
-    const [conversationId, setConversationId] = useState(null)
     const [isRecording, setIsRecording] = useState(false)
     const [isProcessingAudio, setIsProcessingAudio] = useState(false)
+    const [showRealtimeUpdates, setShowRealtimeUpdates] = useState(false)
+    
     const messagesRef = useRef(null)
     const inputRef = useRef(null)
     const mediaRecorderRef = useRef(null)
     const audioChunksRef = useRef([])
+
+    // Use enhanced conversation manager
+    const {
+        conversations,
+        activeConversation,
+        messages,
+        isLoading,
+        realtimeUpdates,
+        loadConversation,
+        sendMessage,
+        clearHistory,
+        getConversationStats,
+        clearRealtimeUpdates
+    } = useConversationManager()
 
     const scrollToBottom = useCallback(() => {
         requestAnimationFrame(() => {
@@ -37,23 +52,28 @@ export default function ChatPage() {
         })
     }, [])
 
-    const loadConversation = useCallback(async (id) => {
+    // Route-based conversation loading: /?conversation=<id>
+    useEffect(() => {
+        const params = new URLSearchParams(location.search || '')
+        const id = params.get('conversation')
         if (!id) return
-        try {
-            const res = await fetch(`/api/chat/conversations/${id}`)
-            if (res.ok) {
-                const data = await res.json()
-                setMessages(data.history || [])
-                setConversationId(data.id)
-                setShowWelcome(false)
-            }
-        } catch (err) {
-            console.error("Failed to load chat", err)
-        }
-    }, [])
+
+        loadConversation(id).finally(() => {
+            // Clean the URL after we load, so refresh doesn't keep forcing the same load.
+            navigate('/', { replace: true })
+        })
+    }, [location.search, loadConversation, navigate])
+
+    useEffect(() => { 
+        scrollToBottom() 
+    }, [messages, scrollToBottom])
 
     useEffect(() => {
-        const handleClear = () => { setMessages([]); setShowWelcome(true); setConversationId(null); }
+        const handleClear = () => { 
+            clearHistory()
+            setShowWelcome(true)
+        }
+        
         const handleLoadChat = async (e) => {
             const id = e.detail?.id
             if (!id) return
@@ -66,22 +86,15 @@ export default function ChatPage() {
             window.removeEventListener('airavat:clear-chat', handleClear)
             window.removeEventListener('airavat:load-chat', handleLoadChat)
         }
-    }, [loadConversation])
-
-    // Route-based conversation loading: /chat/:id
-    useEffect(() => {
-        if (routeId) {
-            loadConversation(routeId)
-        }
-    }, [routeId, loadConversation])
-
-    useEffect(() => { scrollToBottom() }, [messages, scrollToBottom])
+    }, [clearHistory, loadConversation])
 
     const handleSubmit = async (e) => {
         e.preventDefault()
         const message = input.trim()
         if (!message) return
-        await sendMessage(message)
+        await sendMessage(message, activeConversation?.id)
+        setInput('')
+        setShowWelcome(false)
     }
 
     const toggleRecording = async () => {
@@ -111,7 +124,9 @@ export default function ChatPage() {
                     if (result && result.text) {
                         const message = result.text.trim()
                         if (message) {
-                            await sendMessage(message)
+                            await sendMessage(message, activeConversation?.id)
+                            setInput('')
+                            setShowWelcome(false)
                         }
                     }
                 } catch (err) {
@@ -131,48 +146,6 @@ export default function ChatPage() {
         }
     }
 
-    const sendMessage = async (message) => {
-        setShowWelcome(false)
-        setMessages((prev) => [...prev, { role: 'user', content: message }])
-        setInput('')
-
-        const wittyReplies = [
-            "on it."
-        ];
-        const wittyReply = wittyReplies[Math.floor(Math.random() * wittyReplies.length)];
-        setMessages((prev) => [...prev, { role: 'assistant', content: wittyReply }])
-
-        try {
-            const payload = { message }
-            if (conversationId) {
-                payload.conversation_id = conversationId
-            }
-
-            const res = await fetch('/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            })
-            if (!res.ok) {
-                const err = await res.json()
-                setMessages((prev) => [...prev, { role: 'error', content: err.error || 'Something went wrong' }])
-                return
-            }
-            const data = await res.json()
-            if (data.toolCalls?.length > 0) setMessages((prev) => [...prev, { role: 'tools', toolCalls: data.toolCalls }])
-            if (data.reply) setMessages((prev) => [...prev, { role: 'assistant', content: data.reply }])
-
-            if (data.conversation_id && data.conversation_id !== conversationId) {
-                setConversationId(data.conversation_id)
-                window.dispatchEvent(new CustomEvent('airavat:chat-active', { detail: { id: data.conversation_id } }))
-            }
-        } catch {
-            setMessages((prev) => [...prev, { role: 'error', content: 'Network error — is the server running?' }])
-        } finally {
-            inputRef.current?.focus()
-        }
-    }
-
     const handleKeyDown = (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(e) }
     }
@@ -184,21 +157,82 @@ export default function ChatPage() {
         el.style.height = Math.min(el.scrollHeight, 120) + 'px'
     }
 
+    const stats = getConversationStats()
+
     return (
         <main className="flex-1 flex flex-col bg-page-bg overflow-hidden">
             {/* Header */}
-            <div className="bg-surface border-b border-border px-5 py-2.5 flex items-center gap-2 font-bold text-sm text-text-primary">
-                <img src={airavatLogo} alt="Airavat" className="w-5 h-5 object-contain" />
-                Chat
+            <div className="bg-surface border-b border-border px-5 py-2.5 flex items-center justify-between">
+                <div className="flex items-center gap-2 font-bold text-sm text-text-primary">
+                    <img src={airavatLogo} alt="Airavat" className="w-5 h-5 object-contain" />
+                    Chat
+                    {activeConversation && (
+                        <span className="text-xs text-text-muted ml-2">
+                            ({stats.messageCount} messages, {stats.totalTokens} tokens)
+                        </span>
+                    )}
+                </div>
+                
+                <div className="flex items-center gap-3">
+                    {/* Real-time Updates Indicator */}
+                    {realtimeUpdates.length > 0 && (
+                        <button
+                            onClick={() => setShowRealtimeUpdates(!showRealtimeUpdates)}
+                            className="text-xs text-fb-blue hover:text-fb-blue-hover flex items-center gap-1"
+                        >
+                            <div className="w-2 h-2 bg-fb-blue rounded-full animate-pulse" />
+                            {realtimeUpdates.length} updates
+                        </button>
+                    )}
+                    
+                    {/* Stats */}
+                    <button
+                        onClick={() => console.log('Stats:', stats)}
+                        className="text-xs text-text-muted hover:text-text-primary"
+                    >
+                        Stats
+                    </button>
+                </div>
             </div>
+
+            {/* Real-time Updates Panel */}
+            {showRealtimeUpdates && realtimeUpdates.length > 0 && (
+                <div className="bg-surface-hover border-b border-border p-2 max-h-32 overflow-y-auto">
+                    <div className="text-xs font-bold text-text-primary mb-1">Real-time Updates</div>
+                    {realtimeUpdates.map((update, i) => (
+                        <div key={i} className="text-[10px] text-text-muted mb-1">
+                            {update.type}: {update.conversationId} - {new Date(update.timestamp).toLocaleTimeString()}
+                        </div>
+                    ))}
+                    <button
+                        onClick={clearRealtimeUpdates}
+                        className="text-[10px] text-fb-blue hover:text-fb-blue-hover mt-1"
+                    >
+                        Clear
+                    </button>
+                </div>
+            )}
 
             {/* Messages */}
             <div ref={messagesRef} className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-2.5 custom-scrollbar scroll-smooth">
-                {showWelcome && messages.length === 0 && (
+                {isLoading && (
+                    <div className="flex justify-center py-4">
+                        <div className="text-sm text-text-muted">Loading conversation...</div>
+                    </div>
+                )}
+
+                {showWelcome && messages.length === 0 && !isLoading && (
                     <div className="flex flex-col items-center justify-center text-center py-16 animate-fade-in">
-                        <div className="w-32 h-32 rounded-full flex items-center justify-center  "><img src={airavatLogo} alt="Airavat" className="w-full object-cover" /></div>
+                        <div className="w-32 h-32 rounded-full flex items-center justify-center">
+                            <img src={airavatLogo} alt="Airavat" className="w-full object-cover" />
+                        </div>
                         <h2 className="text-xl font-bold mb-1.5 text-text-primary">Welcome to Airavat</h2>
-                        <p className="text-[13px] text-text-secondary max-w-[400px] leading-relaxed">Your MCP-powered AI assistant. Ask me anything — I can use tools from connected MCP servers to help you.</p>
+                        <p className="text-[13px] text-text-secondary max-w-[400px] leading-relaxed">
+                            Your MCP-powered AI assistant with enhanced real-time process tracking.
+                        </p>
+                        <div className="mt-4 text-xs text-text-muted">
+                            {stats.totalConversations} conversations • {stats.totalTokens} total tokens
+                        </div>
                     </div>
                 )}
 
@@ -214,7 +248,9 @@ export default function ChatPage() {
                                             </svg>
                                             <span className="font-bold">{tc.name}</span>
                                         </div>
-                                        <div className="text-text-secondary text-[10px] leading-snug max-h-[100px] overflow-auto whitespace-pre-wrap thin-scrollbar">{JSON.stringify(tc.input || {}, null, 2)}</div>
+                                        <div className="text-text-secondary text-[10px] leading-snug max-h-[100px] overflow-auto whitespace-pre-wrap thin-scrollbar">
+                                            {JSON.stringify(tc.input || {}, null, 2)}
+                                        </div>
                                     </div>
                                 ))}
                             </div>
@@ -227,7 +263,9 @@ export default function ChatPage() {
 
                     return (
                         <div key={i} className="max-w-[680px] w-full mx-auto animate-message-in">
-                            <div className={`text-[11px] font-bold uppercase tracking-wide mb-1 px-0.5 ${isUser ? 'text-fb-blue text-right' : isError ? 'text-red' : 'text-text-muted'}`}>{roleLabel}</div>
+                            <div className={`text-[11px] font-bold uppercase tracking-wide mb-1 px-0.5 ${isUser ? 'text-fb-blue text-right' : isError ? 'text-red' : 'text-text-muted'}`}>
+                                {roleLabel}
+                            </div>
                             <div
                                 className={`px-3.5 py-2.5 text-[13px] leading-relaxed break-words whitespace-pre-wrap ${isUser
                                     ? 'bg-fb-blue text-white rounded-md rounded-bl-sm ml-20'
@@ -255,8 +293,15 @@ export default function ChatPage() {
                             onChange={handleInputChange}
                             onKeyDown={handleKeyDown}
                             autoFocus
+                            disabled={isLoading}
                         />
-                        <button type="button" onClick={toggleRecording} disabled={isProcessingAudio} title={isRecording ? "Stop Recording" : "Voice Input"} className={`flex items-center justify-center w-8 h-8 border-none rounded cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0 ${isRecording ? 'bg-red text-white animate-pulse' : 'bg-surface-hover text-text-secondary hover:text-text-primary'}`}>
+                        <button 
+                            type="button" 
+                            onClick={toggleRecording} 
+                            disabled={isProcessingAudio || isLoading} 
+                            title={isRecording ? "Stop Recording" : "Voice Input"} 
+                            className={`flex items-center justify-center w-8 h-8 border-none rounded cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0 ${isRecording ? 'bg-red text-white animate-pulse' : 'bg-surface-hover text-text-secondary hover:text-text-primary'}`}
+                        >
                             {isProcessingAudio ? (
                                 <svg className="animate-spin w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
@@ -271,7 +316,12 @@ export default function ChatPage() {
                                 </svg>
                             )}
                         </button>
-                        <button type="submit" disabled={!input.trim() || isProcessingAudio} title="Send" className="flex items-center justify-center w-8 h-8 border-none rounded bg-fb-blue text-white cursor-pointer transition-colors hover:bg-fb-blue-hover disabled:opacity-40 disabled:cursor-not-allowed shrink-0">
+                        <button 
+                            type="submit" 
+                            disabled={!input.trim() || isProcessingAudio || isLoading} 
+                            title="Send" 
+                            className="flex items-center justify-center w-8 h-8 border-none rounded bg-fb-blue text-white cursor-pointer transition-colors hover:bg-fb-blue-hover disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                        >
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                                 <line x1="22" y1="2" x2="11" y2="13" />
                                 <polygon points="22 2 15 22 11 13 2 9 22 2" />

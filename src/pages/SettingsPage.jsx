@@ -65,7 +65,7 @@ export default function SettingsPage() {
     }, [])
 
     const loadMCPServers = useCallback(async () => {
-        try { const res = await fetch('/api/settings/mcp'); const data = await res.json(); setMcpServers(data.servers) }
+        try { const res = await fetch('/api/settings/mcp'); const data = await res.json(); setMcpServers(Array.isArray(data.servers) ? data.servers : (Array.isArray(data) ? data : [])) }
         catch { setMcpServers([]) }
     }, [])
 
@@ -74,7 +74,7 @@ export default function SettingsPage() {
             const res = await fetch('/api/ollama/models')
             if (!res.ok) { const data = await res.json(); showToast(data.error || 'Failed to load models', 'error'); return }
             const data = await res.json()
-            setOllamaModels(data.models || [])
+            setOllamaModels(Array.isArray(data.models) ? data.models : [])
         } catch { setOllamaModels([]) }
     }
 
@@ -93,7 +93,7 @@ export default function SettingsPage() {
         try {
             const res = await fetch(`/api/models/${provider}`)
             const data = await res.json()
-            if (res.ok) setOnlineModels(data.models || [])
+            if (res.ok) setOnlineModels(Array.isArray(data.models) ? data.models : [])
             else { setOnlineModels([]); if (data.error) showToast(data.error, 'error') }
         } catch { setOnlineModels([]) }
         finally { setLoadingModels(false) }
@@ -103,8 +103,11 @@ export default function SettingsPage() {
         // Optimistic: update local state immediately
         const prevConfig = agentConfig
         setAgentConfig(prev => {
+            if (!prev) return prev;
             const updated = JSON.parse(JSON.stringify(prev))
-            if (updated.llm[activeProvider]) updated.llm[activeProvider].model = model
+            if (!updated.llm) updated.llm = {};
+            if (!updated.llm[activeProvider]) updated.llm[activeProvider] = {};
+            updated.llm[activeProvider].model = model
             return updated
         })
         setSwitchingModel(true)
@@ -140,13 +143,13 @@ export default function SettingsPage() {
 
         const onMcpToggled = (data) => {
             setMcpServers(prev =>
-                prev.map(s => s.name === data.name ? { ...s, enabled: data.enabled, connected: data.connected } : s)
+                (Array.isArray(prev) ? prev : []).map(s => s.name === data.name ? { ...s, enabled: data.enabled, connected: data.connected } : s)
             )
         }
 
         const onMcpArgsUpdated = (data) => {
             setMcpServers(prev =>
-                prev.map(s => s.name === data.name ? { ...s, args: data.args, connected: data.connected } : s)
+                (Array.isArray(prev) ? prev : []).map(s => s.name === data.name ? { ...s, args: data.args, connected: data.connected } : s)
             )
         }
 
@@ -181,7 +184,9 @@ export default function SettingsPage() {
         // Optimistic: update provider immediately
         const prevConfig = agentConfig
         setAgentConfig(prev => {
+            if (!prev) return prev;
             const updated = JSON.parse(JSON.stringify(prev))
+            if (!updated.llm) updated.llm = {};
             updated.llm.provider = provider
             return updated
         })
@@ -206,7 +211,10 @@ export default function SettingsPage() {
         // Optimistic
         const prevConfig = agentConfig
         setAgentConfig(prev => {
+            if (!prev) return prev;
             const updated = JSON.parse(JSON.stringify(prev))
+            if (!updated.llm) updated.llm = {};
+            if (!updated.llm.ollama) updated.llm.ollama = {};
             updated.llm.ollama.model = model
             return updated
         })
@@ -222,7 +230,7 @@ export default function SettingsPage() {
 
     const toggleMcpServer = async (name, enabled) => {
         // Optimistic: toggle immediately
-        setMcpServers(prev => prev.map(s => s.name === name ? { ...s, enabled } : s))
+        setMcpServers(prev => (Array.isArray(prev) ? prev : []).map(s => s.name === name ? { ...s, enabled } : s))
         setTogglingServer(name)
         try {
             const res = await fetch(`/api/settings/mcp/${encodeURIComponent(name)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) })
@@ -235,7 +243,7 @@ export default function SettingsPage() {
 
     const toggleServerArg = async (name, flag, shouldAdd) => {
         // Optimistic: toggle arg immediately
-        setMcpServers(prev => prev.map(s => {
+        setMcpServers(prev => (Array.isArray(prev) ? prev : []).map(s => {
             if (s.name !== name) return s
             const newArgs = shouldAdd ? [...s.args, flag] : s.args.filter(a => a !== flag)
             return { ...s, args: newArgs }
@@ -370,11 +378,11 @@ export default function SettingsPage() {
                                 <span className="w-4 h-4 border-2 border-fb-blue border-t-transparent rounded-full animate-spin" />
                                 <span className="text-xs text-text-muted">Loading models...</span>
                             </div>
-                        ) : onlineModels.length === 0 ? (
+                        ) : (!onlineModels || onlineModels.length === 0) ? (
                             <p className="text-xs text-text-muted py-1">No models available. Make sure your API key is set and saved.</p>
                         ) : (
                             <div className="flex flex-col gap-1.5 max-h-[240px] overflow-y-auto thin-scrollbar">
-                                {onlineModels.map((m) => {
+                                {(onlineModels || []).map((m) => {
                                     const isActive = m.id === activeOnlineModel
                                     return (
                                         <div key={m.id} onClick={() => !switchingModel && !isActive && switchOnlineModel(m.id)}
@@ -423,9 +431,9 @@ export default function SettingsPage() {
                             <span className="text-xs text-text-muted">Select which downloaded Ollama model to use</span>
                         </div>
                         <div className="flex flex-col gap-1.5">
-                            {ollamaModels.length === 0 ? (
+                            {(!ollamaModels || ollamaModels.length === 0) ? (
                                 <p className="text-xs text-text-muted py-1">No models downloaded. Run <code className="bg-surface-hover px-1 rounded font-mono text-[11px]">ollama pull &lt;model&gt;</code> to add one.</p>
-                            ) : ollamaModels.map((m) => {
+                            ) : (ollamaModels || []).map((m) => {
                                 const isActive = m.name === activeOllamaModel
                                 return (
                                     <div key={m.name} onClick={() => !switchingOllama && !isActive && switchOllamaModel(m.name)}
@@ -458,15 +466,16 @@ export default function SettingsPage() {
                         <span className="text-xs text-text-muted">Enable or disable MCP tool servers. Changes take effect immediately.</span>
                     </div>
                     <div className="flex flex-col gap-2">
-                        {mcpServers.length === 0 ? (
+                        {(!mcpServers || mcpServers.length === 0) ? (
                             <p className="text-xs text-text-muted py-1">No servers configured in mcp-config.json</p>
-                        ) : mcpServers.map((s) => {
+                        ) : (mcpServers || []).map((s) => {
+                            if (!s) return null;
                             const isToggling = togglingServer === s.name
                             const isBrowser = s.name === 'browser'
-                            const isHeadless = s.args.includes('--headless')
+                            const isHeadless = Array.isArray(s.args) && s.args.includes('--headless')
                             const isTogglingHeadless = togglingArg === `${s.name}:--headless`
                             return (
-                                <div key={s.name} className={`bg-surface border border-border rounded transition-all hover:border-border-dark ${!s.enabled && !isToggling ? 'opacity-50' : ''} ${isToggling ? 'opacity-40 pointer-events-none' : ''}`}>
+                                <div key={s.name || Math.random()} className={`bg-surface border border-border rounded transition-all hover:border-border-dark ${!s.enabled && !isToggling ? 'opacity-50' : ''} ${isToggling ? 'opacity-40 pointer-events-none' : ''}`}>
                                     <div className="flex items-center justify-between px-3.5 py-3">
                                         <div className="flex flex-col gap-1">
                                             <div className="text-[13px] font-bold text-text-primary flex items-center gap-1.5">
@@ -477,7 +486,7 @@ export default function SettingsPage() {
                                                 )}
                                                 {s.name}
                                             </div>
-                                            <div className="text-[10px] font-mono text-text-muted">{s.command} {s.args.join(' ')}</div>
+                                            <div className="text-[10px] font-mono text-text-muted">{s.command} {(s.args || []).join(' ')}</div>
                                         </div>
                                         <label className="relative w-10 h-[22px] shrink-0">
                                             <input type="checkbox" className="opacity-0 w-0 h-0" checked={s.enabled} onChange={(e) => toggleMcpServer(s.name, e.target.checked)} disabled={isToggling} />

@@ -23,8 +23,10 @@ export default function useConfigSocket() {
     const connect = useCallback(() => {
         if (!mountedRef.current) return
 
-        const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
-        const ws = new WebSocket(`${protocol}://${location.host}/ws/config`)
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+        const host = window.location.host
+        const wsUrl = `${protocol}//${host}/ws/config`
+        const ws = new WebSocket(wsUrl)
         wsRef.current = ws
 
         ws.onopen = () => {
